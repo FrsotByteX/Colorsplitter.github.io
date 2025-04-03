@@ -253,7 +253,6 @@
                 <div class="panel">
                     <div class="panel-title">Dominant Colors</div>
                     <div class="colors-container" id="colors-container">
-                        <!-- Color swatches will be added here -->
                         <div style="text-align: center; padding: 20px;">
                             Process an image to see dominant colors
                         </div>
@@ -279,6 +278,7 @@
             <button id="process-btn" class="btn btn-accent">Process Image</button>
             <button id="stop-btn" class="btn" disabled>Stop</button>
             <button id="output-btn" class="btn">Save Output</button>
+            <button id="export-layers-btn" class="btn">Export Color Layers</button>
         </div>
         
         <div class="progress-container" id="progress-container">
@@ -303,6 +303,8 @@
         let outputZoom = 1.0;
         let originalImageData = null;
         let processedImageData = null;
+        let imageWidth = 0;
+        let imageHeight = 0;
         
         // DOM elements
         const inputCanvas = document.getElementById('input-canvas');
@@ -600,6 +602,7 @@
             document.getElementById('process-btn').disabled = true;
             document.getElementById('stop-btn').disabled = false;
             document.getElementById('output-btn').disabled = true;
+            document.getElementById('export-layers-btn').disabled = true;
             progressContainer.style.display = 'block';
             progressBar.value = 0;
             statusBar.textContent = "Processing started...";
@@ -608,6 +611,8 @@
             const tempCanvas = document.createElement('canvas');
             tempCanvas.width = originalImage.width;
             tempCanvas.height = originalImage.height;
+            imageWidth = originalImage.width;
+            imageHeight = originalImage.height;
             const tempCtx = tempCanvas.getContext('2d');
             tempCtx.drawImage(originalImage, 0, 0);
             const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
@@ -657,6 +662,8 @@
                 processing = false;
                 document.getElementById('process-btn').disabled = false;
                 document.getElementById('stop-btn').disabled = true;
+                document.getElementById('output-btn').disabled = false;
+                document.getElementById('export-layers-btn').disabled = false;
                 progressContainer.style.display = 'none';
                 return;
             }
@@ -692,6 +699,7 @@
             document.getElementById('process-btn').disabled = false;
             document.getElementById('stop-btn').disabled = true;
             document.getElementById('output-btn').disabled = false;
+            document.getElementById('export-layers-btn').disabled = false;
             progressContainer.style.display = 'none';
             processing = false;
             
@@ -743,6 +751,29 @@
                 return;
             }
             
+            // Create a download link for the processed image
+            outputCanvas.toBlob(blob => {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'processed_image.png';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                statusBar.textContent = "Processed image saved";
+            }, 'image/png');
+        }
+        
+        // Export color layers
+        function exportColorLayers() {
+            if (!processedImageData || !colorLabels || !dominantColors) {
+                statusBar.textContent = "No processed image to export";
+                return;
+            }
+            
+            statusBar.textContent = "Preparing color layers for export...";
+            
             // Create a zip file with all the color layers
             const zip = new JSZip();
             const imgFolder = zip.folder("color_layers");
@@ -755,62 +786,90 @@
             imgFolder.file("color_info.txt", colorInfo);
             
             // Create and add each color layer
-            const width = processedImageData.width;
-            const height = processedImageData.height;
+            const width = imageWidth;
+            const height = imageHeight;
             
-            dominantColors.forEach((color, index) => {
-                const layerCanvas = document.createElement('canvas');
-                layerCanvas.width = width;
-                layerCanvas.height = height;
-                const layerCtx = layerCanvas.getContext('2d');
-                
-                // Create image data for this layer
-                const layerData = new Uint8ClampedArray(width * height * 4);
-                
-                for (let i = 0; i < colorLabels.length; i++) {
-                    const baseIndex = i * 4;
-                    if (colorLabels[i] === index) {
-                        // This pixel belongs to the current color
-                        layerData[baseIndex] = color.r;
-                        layerData[baseIndex + 1] = color.g;
-                        layerData[baseIndex + 2] = color.b;
-                        layerData[baseIndex + 3] = 255; // Fully opaque
-                    } else {
-                        // Transparent pixel
-                        layerData[baseIndex] = 0;
-                        layerData[baseIndex + 1] = 0;
-                        layerData[baseIndex + 2] = 0;
-                        layerData[baseIndex + 3] = 0;
-                    }
+            // Show progress
+            progressContainer.style.display = 'block';
+            progressBar.value = 0;
+            
+            // Process layers in chunks to avoid blocking the UI
+            let processedLayers = 0;
+            const totalLayers = dominantColors.length;
+            
+            function processNextLayer() {
+                if (processedLayers >= totalLayers) {
+                    // All layers processed, generate the zip
+                    progressBar.value = 100;
+                    statusBar.textContent = "Generating ZIP file...";
+                    
+                    zip.generateAsync({ type: 'blob' }, (metadata) => {
+                        progressBar.value = metadata.percent;
+                    }).then(content => {
+                        const url = URL.createObjectURL(content);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = 'color_layers.zip';
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                        statusBar.textContent = "Color layers exported successfully";
+                        progressContainer.style.display = 'none';
+                    });
+                    return;
                 }
                 
-                const layerImageData = new ImageData(layerData, width, height);
-                layerCtx.putImageData(layerImageData, 0, 0);
+                const index = processedLayers;
+                const color = dominantColors[index];
                 
-                // Add to zip
-                layerCanvas.toBlob(blob => {
-                    imgFolder.file(`color_layer_${index + 1}.png`, blob);
-                }, 'image/png');
-            });
+                setTimeout(() => {
+                    const layerCanvas = document.createElement('canvas');
+                    layerCanvas.width = width;
+                    layerCanvas.height = height;
+                    const layerCtx = layerCanvas.getContext('2d');
+                    
+                    // Create image data for this layer
+                    const layerData = new Uint8ClampedArray(width * height * 4);
+                    
+                    for (let i = 0; i < colorLabels.length; i++) {
+                        const baseIndex = i * 4;
+                        if (colorLabels[i] === index) {
+                            // This pixel belongs to the current color
+                            layerData[baseIndex] = color.r;
+                            layerData[baseIndex + 1] = color.g;
+                            layerData[baseIndex + 2] = color.b;
+                            layerData[baseIndex + 3] = 255; // Fully opaque
+                        } else {
+                            // Transparent pixel
+                            layerData[baseIndex] = 0;
+                            layerData[baseIndex + 1] = 0;
+                            layerData[baseIndex + 2] = 0;
+                            layerData[baseIndex + 3] = 0;
+                        }
+                    }
+                    
+                    const layerImageData = new ImageData(layerData, width, height);
+                    layerCtx.putImageData(layerImageData, 0, 0);
+                    
+                    // Add to zip
+                    layerCanvas.toBlob(blob => {
+                        imgFolder.file(`color_layer_${index + 1}.png`, blob);
+                        processedLayers++;
+                        progressBar.value = (processedLayers / totalLayers) * 100;
+                        processNextLayer();
+                    }, 'image/png');
+                }, 0);
+            }
             
-            // Generate the zip file
-            zip.generateAsync({ type: 'blob' }).then(content => {
-                const url = URL.createObjectURL(content);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'color_layers.zip';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-                statusBar.textContent = "Output saved successfully";
-            });
+            processNextLayer();
         }
         
         // Event listeners
         document.getElementById('process-btn').addEventListener('click', processImage);
         document.getElementById('stop-btn').addEventListener('click', stopProcessingHandler);
         document.getElementById('output-btn').addEventListener('click', saveOutput);
+        document.getElementById('export-layers-btn').addEventListener('click', exportColorLayers);
         
         // Initialize
         applyTheme();
